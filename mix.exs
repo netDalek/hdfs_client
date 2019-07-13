@@ -19,7 +19,8 @@ defmodule HdfsClient.MixProject do
 
   defp deps do
     [
-      {:ibrowse, ">= 0.0.0"}
+      {:ibrowse, ">= 0.0.0"},
+      {:jason, "~> 1.1"}
     ]
   end
 end

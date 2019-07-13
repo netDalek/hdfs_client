@@ -16,18 +16,50 @@ defmodule HdfsClient do
     :world
   end
 
-  def connect(host, port \\ 80, scheme \\ :http) do
-    with {:ok, conn} <- Mint.HTTP.connect(scheme, host, port) do
-      opts = %{}
-      {:ok, {conn, opts}}
+  def init(url, user \\ "hadoop") do
+    %{url: url, user: user, path: "", attrs: [{"user.name", user}]}
+  end
+
+  def cd(state, path) do
+    %{state | path: :filename.join(state.path, path)}
+  end
+
+  def list(state) do
+    url = url(state, "", "LISTSTATUS", [])
+
+    with {:ok, '200', _, body} <- :ibrowse.send_req(url, [], :get, [], response_format: :binary),
+         {:ok, list} <- Jason.decode(body) do
+      list
+      |> Map.get("FileStatuses")
+      |> Map.get("FileStatus")
     end
   end
 
-  def authenticate({conn, opts}, user) do
-    {conn, Map.put(opts, :user, user)}
+  def info(state, filename) do
+    url = url(state, filename, "GETFILESTATUS", [])
+
+    with {:ok, '200', _, body} <- :ibrowse.send_req(url, [], :get, [], response_format: :binary),
+         {:ok, list} <- Jason.decode(body) do
+      list
+      |> Map.get("FileStatus")
+    end
   end
 
-  def list({conn, opts}, path) do
-    Mint.HTTP.request(conn, "GET", "webhdfs/v1#{path}?op=LISTSTATUS&user.name=#{opts.user}", [], "")
+  def read(state, filename) do
+    url = url(state, filename, "OPEN", [])
+
+    with {:ok, '200', _, body} <- :ibrowse.send_req(url, [], :get, [], response_format: :binary) do
+      {:ok, body}
+    end
+  end
+
+  defp strip(str) do
+    String.trim(str, "/")
+  end
+
+  defp url(state, filename, operation, attrs) do
+    path = :filename.join(state.path, filename)
+    query = :uri_string.compose_query(state.attrs ++ [{"op", operation} | attrs])
+    "#{strip(state.url)}/#{strip(path)}?#{query}" |> String.to_charlist()
   end
 end
