@@ -1,65 +1,87 @@
 defmodule HdfsClient do
-  @moduledoc """
-  Documentation for HdfsClient.
-  """
-
-  @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> HdfsClient.hello()
-      :world
-
-  """
-  def hello do
-    :world
+  def open(host, port \\ 14000, scheme \\ :http, user \\ "hadoop") do
+    with {:ok, conn} <- Mint.HTTP.connect(scheme, host, port) do
+      {:ok, %{conn: conn, attrs: [{"user.name", user}]}}
+    end
   end
 
-  def init(url, user \\ "hadoop") do
-    %{url: url, user: user, path: "", attrs: [{"user.name", user}]}
+  def close(state) do
+    Mint.HTTP.close(state.conn)
+    :ok
   end
 
-  def cd(state, path) do
-    %{state | path: :filename.join(state.path, path)}
-  end
+  def list(state, path) do
+    url = url(state, path, "LISTSTATUS", [])
 
-  def list(state) do
-    url = url(state, "", "LISTSTATUS", [])
+    with {:ok, conn, _request_ref} <- Mint.HTTP.request(state.conn, "GET", url, [], nil) do
+      {:ok, conn, 200, body} = get_response(conn)
 
-    with {:ok, '200', _, body} <- :ibrowse.send_req(url, [], :get, [], response_format: :binary),
-         {:ok, list} <- Jason.decode(body) do
-      list
-      |> Map.get("FileStatuses")
-      |> Map.get("FileStatus")
+      list =
+        Jason.decode!(body)
+        |> Map.get("FileStatuses")
+        |> Map.get("FileStatus")
+
+      {:ok, %{state | conn: conn}, list}
     end
   end
 
   def info(state, filename) do
     url = url(state, filename, "GETFILESTATUS", [])
 
-    with {:ok, '200', _, body} <- :ibrowse.send_req(url, [], :get, [], response_format: :binary),
-         {:ok, list} <- Jason.decode(body) do
-      list
-      |> Map.get("FileStatus")
+    with {:ok, conn, _request_ref} = Mint.HTTP.request(state.conn, "GET", url, [], nil) do
+      {:ok, conn, 200, body} = get_response(conn)
+
+      info =
+        Jason.decode!(body)
+        |> Map.get("FileStatus")
+
+      {:ok, %{state | conn: conn}, info}
     end
   end
 
-  def read(state, filename) do
+  def read_all(state, filename) do
     url = url(state, filename, "OPEN", [])
 
-    with {:ok, '200', _, body} <- :ibrowse.send_req(url, [], :get, [], response_format: :binary) do
-      {:ok, body}
-    end
-  end
-
-  defp strip(str) do
-    String.trim(str, "/")
+    {:ok, conn, _request_ref} = Mint.HTTP.request(state.conn, "GET", url, [], nil)
+    {:ok, conn, 200, body} = get_response(conn)
+    {:ok, %{state | conn: conn}, body}
   end
 
   defp url(state, filename, operation, attrs) do
-    path = :filename.join(state.path, filename)
-    query = :uri_string.compose_query(state.attrs ++ [{"op", operation} | attrs])
-    "#{strip(state.url)}/#{strip(path)}?#{query}" |> String.to_charlist()
+    filename = String.trim(filename, "/")
+    query = URI.encode_query(state.attrs ++ [{"op", operation} | attrs])
+    "/webhdfs/v1/#{filename}?#{query}"
+  end
+
+  defp get_response(conn) do
+    {conn, response} = recv_all(conn)
+    {:status, _, code} = :lists.keyfind(:status, 1, response)
+
+    data =
+      response
+      |> Enum.filter(fn e -> :data == :erlang.element(1, e) end)
+      |> Enum.map(&:erlang.element(3, &1))
+
+    {:ok, conn, code, data}
+  end
+
+  defp recv_all(conn, data \\ []) do
+    receive do
+      {:tcp, _, _} = message ->
+        {:ok, conn, mint_responses} = Mint.HTTP.stream(conn, message)
+
+        case :lists.keyfind(:done, 1, mint_responses) do
+          false ->
+            recv_all(conn, [mint_responses | data])
+
+          _ ->
+            data =
+              [mint_responses | data]
+              |> Enum.reverse()
+              |> List.flatten()
+
+            {conn, data}
+        end
+    end
   end
 end

@@ -2,76 +2,36 @@ defmodule HdfsClientTest do
   use ExUnit.Case
   doctest HdfsClient
 
-  test "greets the world" do
-    assert 1 <
-             HdfsClient.init("http://hdp-node1.staging.fun-box.ru:14000/webhdfs/v1/")
-             |> HdfsClient.cd("/a2p")
-             |> HdfsClient.list()
-             |> Enum.map(&Map.get(&1, "pathSuffix"))
-             |> Enum.join()
-             |> String.length()
-  end
+  test "list" do
+    with {:ok, conn} <- HdfsClient.open("hdp-node1.staging.fun-box.ru") do
+      {:ok, conn, list} = HdfsClient.list(conn, "/")
 
-  test "info" do
-    assert %{"type" => "FILE"} =
-             HdfsClient.init("http://hdp-node1.staging.fun-box.ru:14000/webhdfs/v1/")
-             |> HdfsClient.cd("/a2p")
-             |> HdfsClient.info("templates.json")
-  end
+      assert 344 ==
+               list
+               |> Enum.map(&Map.get(&1, "pathSuffix"))
+               |> Enum.join()
+               |> String.length()
 
-  test "read" do
-    assert {:ok, body} =
-             HdfsClient.init("http://hdp-node1.staging.fun-box.ru:14000/webhdfs/v1/")
-             |> HdfsClient.cd("/a2p")
-             |> HdfsClient.read("templates.json")
-  end
+      {:ok, conn, list} = HdfsClient.list(conn, "a2p")
+      assert 24 == Enum.count(list)
 
-  defp recv_all(conn, data \\ []) do
-    receive do
-      {:tcp, _, _} = message ->
-        {:ok, conn, mint_responses} = Mint.HTTP.stream(conn, message)
-
-        case :lists.keyfind(:done, 1, mint_responses) do
-          false ->
-            recv_all(conn, [mint_responses | data])
-
-          _ ->
-            data = [mint_responses | data]
-            |> Enum.reverse()
-            |> List.flatten()
-
-            {conn, data}
-        end
+      HdfsClient.close(conn)
     end
   end
 
-  test "mint" do
-    {:ok, conn} = Mint.HTTP.connect(:http, "hdp-node1.staging.fun-box.ru", 14000)
-
-    {:ok, conn, _request_ref} =
-      Mint.HTTP.request(conn, "GET", "/webhdfs/v1?user.name=hadoop&op=LISTSTATUS", [], nil)
-
-    {:ok, conn, 200, body} = get_response(conn)
-    %{"FileStatuses" => _} = body |> Jason.decode!()
-
-    {:ok, conn, _request_ref} =
-      Mint.HTTP.request(conn, "GET", "/webhdfs/v1?user.name=hadoop&op=LISTSTATUS", [], nil)
-
-    {:ok, conn, 200, body} = get_response(conn)
-    %{"FileStatuses" => _} = body |> Jason.decode!()
-
-    Mint.HTTP.close(conn)
+  test "info" do
+    with {:ok, conn} <- HdfsClient.open("hdp-node1.staging.fun-box.ru") do
+      {:ok, conn, info} = HdfsClient.info(conn, "/a2p/templates.json")
+      assert %{"type" => "FILE"} = info
+      HdfsClient.close(conn)
+    end
   end
 
-  defp get_response(conn) do
-    {conn, response} = recv_all(conn)
-    {:status, _, code} = :lists.keyfind(:status, 1, response)
-
-    data =
-      response
-      |> Enum.filter(fn e -> :data == :erlang.element(1, e) end)
-      |> Enum.map(&:erlang.element(3, &1))
-
-    {:ok, conn, code, data}
+  test "read" do
+    with {:ok, conn} <- HdfsClient.open("hdp-node1.staging.fun-box.ru") do
+      {:ok, conn, body} = HdfsClient.read_all(conn, "/a2p/templates.json")
+      Jason.decode!(body)
+      HdfsClient.close(conn)
+    end
   end
 end
